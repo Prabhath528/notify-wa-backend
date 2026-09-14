@@ -1,17 +1,7 @@
 """
-Database bootstrap.
-
-On startup this module:
-1. Connects to the default 'postgres' maintenance database using the
-   credentials in .env (pgAdmin4 local test setup - user postgres /
-   password admin123 by default).
-2. Checks whether the target database (POSTGRES_DB, default
-   'notify_wa_db') exists. If it does not, it creates it automatically -
-   no manual CREATE DATABASE step needed in pgAdmin4.
-3. Creates a SQLAlchemy engine + session factory pointed at that database.
-4. Exposes create_all_tables() which main.py calls on startup to build
-   every table from the models in models.py if they don't already exist.
+Database bootstrap for local & production (Supabase).
 """
+import os
 import psycopg2
 from psycopg2 import sql
 from sqlalchemy import create_engine
@@ -21,38 +11,47 @@ from app.config import settings
 
 
 def ensure_database_exists() -> None:
-    """Connects to the maintenance DB and creates POSTGRES_DB if missing."""
-    conn = psycopg2.connect(
-        dbname="postgres",
-        user=settings.POSTGRES_USER,
-        password=settings.POSTGRES_PASSWORD,
-        host=settings.POSTGRES_HOST,
-        port=settings.POSTGRES_PORT,
-    )
-    conn.autocommit = True
+    """Connects to the maintenance DB and creates POSTGRES_DB if missing (Only for Local)."""
+    # Render cloud / Supabase deploy එකකදී මේක Skip කරනු ලැබේ.
+    if settings.DATABASE_URL and "supabase.com" in settings.DATABASE_URL:
+        print("[db-init] Supabase Cloud Database detected. Skipping local DB creation.")
+        return
+
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s;",
-                (settings.POSTGRES_DB,),
-            )
-            exists = cur.fetchone()
-            if not exists:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user=settings.POSTGRES_USER,
+            password=settings.POSTGRES_PASSWORD,
+            host=settings.POSTGRES_HOST,
+            port=settings.POSTGRES_PORT,
+        )
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
                 cur.execute(
-                    sql.SQL("CREATE DATABASE {}").format(
-                        sql.Identifier(settings.POSTGRES_DB)
-                    )
+                    "SELECT 1 FROM pg_database WHERE datname = %s;",
+                    (settings.POSTGRES_DB,),
                 )
-                print(f"[db-init] Created database '{settings.POSTGRES_DB}'.")
-            else:
-                print(f"[db-init] Database '{settings.POSTGRES_DB}' already exists.")
-    finally:
-        conn.close()
+                exists = cur.fetchone()
+                if not exists:
+                    cur.execute(
+                        sql.SQL("CREATE DATABASE {}").format(
+                            sql.Identifier(settings.POSTGRES_DB)
+                        )
+                    )
+                    print(f"[db-init] Created database '{settings.POSTGRES_DB}'.")
+                else:
+                    print(f"[db-init] Database '{settings.POSTGRES_DB}' already exists.")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[db-init] Local DB check skipped or failed: {e}")
 
 
-# Make sure the DB exists before SQLAlchemy tries to connect to it.
+# Run local check only if needed
 ensure_database_exists()
 
+# SQLAlchemy connection setup
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -63,7 +62,7 @@ def create_all_tables() -> None:
     from app import models  # noqa: F401  (import registers models on Base)
 
     Base.metadata.create_all(bind=engine)
-    print("[db-init] Tables verified/created.")
+    print("[db-init] Tables verified/created successfully.")
 
 
 def get_db():
